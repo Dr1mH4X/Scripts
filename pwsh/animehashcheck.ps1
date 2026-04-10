@@ -80,125 +80,131 @@ Write-Host "Source M count: $($filesM.Count) | Source Z count: $($filesZ.Count)"
 Write-Host "------------------------------------------------"
 
 # 6. Core Comparison Logic
-$count = 0
-$skipped = 0
+# 使用 $script: 作用域前缀，防止被 Measure-Command 的子作用域隔离
+$script:count = 0
+$script:skipped = 0
 
-foreach ($fM in $filesM) {
-    if ($fM.Name -match 'E(\d+)') {
-        $relEp = $matches[1]
-        $absEp = [int]$relEp + $offset
+# 记录总耗时，包裹整个核心循环
+$totalTime = Measure-Command {
+    foreach ($fM in $filesM) {
+        if ($fM.Name -match 'E(\d+)') {
+            $relEp = $matches[1]
+            $absEp = [int]$relEp + $offset
 
-        # 修复 1：格式化集数为 2 位数（如 01），避免误将 1 匹配为 10, 11
-        $epStr = "{0:D2}" -f $absEp
+            $epStr = "{0:D2}" -f $absEp
+            $strictRegex = "\[$epStr(?:v\d)?\]|\s$epStr(?:v\d)?\s|\s$epStr(?:v\d)?\.|E$epStr\b|\-$epStr\b"
 
-        # 修复 2：极其严格的独立集数正则。避免贪婪匹配，坚决排查掉 1080p、10bit 的干扰
-        # 仅匹配带有方括号、空格包裹、紧连扩展名或 E前缀 的独立剧集，支持 v2 修复版
-        $strictRegex = "\[$epStr(?:v\d)?\]|\s$epStr(?:v\d)?\s|\s$epStr(?:v\d)?\.|E$epStr\b|\-$epStr\b"
+            $fZ = $filesZ | Where-Object { $_.Name -match $strictRegex }
 
-        $fZ = $filesZ | Where-Object { $_.Name -match $strictRegex }
+            if (-not $fZ -and $seasonChoice -eq "4" -and $relEp -eq "29") {
+                $fZ = $filesZ | Where-Object { $_.Name -match "Kanketsu-hen.*Zenpen" }
+            }
+            if (-not $fZ -and $seasonChoice -eq "4" -and $relEp -eq "30") {
+                $fZ = $filesZ | Where-Object { $_.Name -match "Kanketsu-hen.*Kouhen" }
+            }
 
-        if (-not $fZ -and $seasonChoice -eq "4" -and $relEp -eq "29") {
-            $fZ = $filesZ | Where-Object { $_.Name -match "Kanketsu-hen.*Zenpen" }
-        }
-        if (-not $fZ -and $seasonChoice -eq "4" -and $relEp -eq "30") {
-            $fZ = $filesZ | Where-Object { $_.Name -match "Kanketsu-hen.*Kouhen" }
-        }
-
-        if (-not $fZ) {
-            Write-Host "Skip: S0${seasonChoice}E$relEp - No matching file on Z-Drive." -ForegroundColor DarkYellow
-            $skipped++
-            continue
-        }
-
-        # 如果意外匹配到多个文件(如同集有 v1 和 v2 且都在目录中)，强制取字典序最后的一个
-        if ($fZ -is [array] -or $fZ.Count -gt 1) {
-            $fZ = $fZ | Sort-Object Name | Select-Object -Last 1
-        }
-
-        $count++
-        Write-Progress -Activity "Calculating $hashMethod (Parallel)" -Status "Processing S0${seasonChoice}E$relEp (Abs: $absEp)" -PercentComplete (($count / $filesM.Count) * 100)
-
-            try {
-                # 修复 3：打包带有 Key 标识的哈希字典，彻底根绝 Parallel 乱序返回带来的数据错乱
-                $tasks = @(
-                    @{ Key = "M"; Path = $fM.FullName },
-                    @{ Key = "Z"; Path = $fZ.FullName }
-                )
-
-                $hashes = $tasks | ForEach-Object -Parallel {
-                    $item = $_
-                    $file = $item.Path
-                    $method = $using:hashMethod
-                    $7z = $using:7zPath
-                    $xxh = $using:xxhPath
-                    $result = "HASH_FAILED"
-
-                    $tmpFile = Join-Path $env:TEMP "hash_$(Get-Random)_$($item.Key).txt"
-
-                    try {
-                        if ($method -eq "MD5") {
-                            $result = (Get-FileHash -LiteralPath $file -Algorithm MD5).Hash
-                        } else {
-                            if ($method -eq "CRC") {
-                                & $7z h -scrcCRC32 $file > $tmpFile 2>&1
-                            } elseif ($method -eq "XXH128") {
-                                & $xxh -H2 $file > $tmpFile 2>&1
-                            }
-                            $out = Get-Content -Path $tmpFile -Raw
-
-                            if ($method -eq "CRC" -and $out -match "CRC32.*([0-9A-Fa-f]{8})\s*$") {
-                                $result = $matches[1].ToUpper()
-                            } elseif ($method -eq "XXH128" -and $out -match "\\?([0-9A-Fa-f]{32})\s") {
-                                $result = $matches[1].ToUpper()
-                            }
-                        }
-                    } catch {
-                    } finally {
-                        if (Test-Path -LiteralPath $tmpFile) {
-                            Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
-                        }
-                    }
-
-                    # 包含身份标识返回
-                    [PSCustomObject]@{
-                        Key  = $item.Key
-                        Hash = $result
-                    }
-                } -ThrottleLimit 2
-            } catch {
-                Write-Host "Error: Parallel execution failed for S0${seasonChoice}E$relEp." -ForegroundColor Red
+            if (-not $fZ) {
+                Write-Host "Skip: S0${seasonChoice}E$relEp - No matching file on Z-Drive." -ForegroundColor DarkYellow
+                $script:skipped++
                 continue
             }
 
-        if ($null -eq $hashes -or $hashes.Count -lt 2) {
-            Write-Host "Error: Hash calculation returned no results for S0${seasonChoice}E$relEp." -ForegroundColor Red
-            continue
+            if ($fZ -is [array] -or $fZ.Count -gt 1) {
+                $fZ = $fZ | Sort-Object Name | Select-Object -Last 1
+            }
+
+            $script:count++
+            Write-Progress -Activity "Calculating $hashMethod (Parallel)" -Status "Processing S0${seasonChoice}E$relEp (Abs: $absEp)" -PercentComplete (($script:count / $filesM.Count) * 100)
+
+            # 准备并行任务数据
+            $tasks = @(
+                @{ Key = "M"; Path = $fM.FullName },
+                @{ Key = "Z"; Path = $fZ.FullName }
+            )
+
+            # 清空缓存并记录单次哈希计算耗时
+            $script:hashes = $null
+            $epTime = Measure-Command {
+                try {
+                    $script:hashes = $tasks | ForEach-Object -Parallel {
+                        $item = $_
+                        $file = $item.Path
+                        $method = $using:hashMethod
+                        $7z = $using:7zPath
+                        $xxh = $using:xxhPath
+                        $result = "HASH_FAILED"
+
+                        $tmpFile = Join-Path $env:TEMP "hash_$(Get-Random)_$($item.Key).txt"
+
+                        try {
+                            if ($method -eq "MD5") {
+                                $result = (Get-FileHash -LiteralPath $file -Algorithm MD5).Hash
+                            } else {
+                                if ($method -eq "CRC") {
+                                    & $7z h -scrcCRC32 $file > $tmpFile 2>&1
+                                } elseif ($method -eq "XXH128") {
+                                    & $xxh -H2 $file > $tmpFile 2>&1
+                                }
+                                $out = Get-Content -Path $tmpFile -Raw
+
+                                if ($method -eq "CRC" -and $out -match "CRC32.*([0-9A-Fa-f]{8})\s*$") {
+                                    $result = $matches[1].ToUpper()
+                                } elseif ($method -eq "XXH128" -and $out -match "\\?([0-9A-Fa-f]{32})\s") {
+                                    $result = $matches[1].ToUpper()
+                                }
+                            }
+                        } catch {
+                        } finally {
+                            if (Test-Path -LiteralPath $tmpFile) {
+                                Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+
+                        # 包含身份标识返回
+                        [PSCustomObject]@{
+                            Key  = $item.Key
+                            Hash = $result
+                        }
+                    } -ThrottleLimit 2
+                } catch {
+                    Write-Host "Error: Parallel execution failed for S0${seasonChoice}E$relEp." -ForegroundColor Red
+                }
+            } # End Measure-Command for single episode
+
+            if ($null -eq $script:hashes -or $script:hashes.Count -lt 2) {
+                Write-Host "Error: Hash calculation returned no results for S0${seasonChoice}E$relEp." -ForegroundColor Red
+                continue
+            }
+
+            # 通过 Key 来绝对定位，防止顺序乱掉
+            $hashM = ($script:hashes | Where-Object { $_.Key -eq "M" }).Hash
+            $hashZ = ($script:hashes | Where-Object { $_.Key -eq "Z" }).Hash
+
+            Write-Host "S0${seasonChoice}E$relEp (Abs: $absEp):" -ForegroundColor Yellow
+            Write-Host "  M-File: $($fM.Name)"
+            Write-Host "  Z-File: $($fZ.Name)"
+            Write-Host "  $hashMethod-M : $hashM"
+            Write-Host "  $hashMethod-Z : $hashZ"
+            # 输出单次耗时，保留两位小数
+            Write-Host "  Time   : $($epTime.TotalSeconds.ToString('F2')) s" -ForegroundColor Cyan
+
+            if ($hashM -eq "HASH_FAILED" -or $hashZ -eq "HASH_FAILED") {
+                Write-Host "  Result : [ HASH FAILED ]" -ForegroundColor Magenta
+            } elseif ($hashM -eq $hashZ) {
+                Write-Host "  Result : [ MATCH ]" -ForegroundColor Green
+            } else {
+                Write-Host "  Result : [ CONFLICT / MISMATCH ]" -ForegroundColor Red
+            }
+            Write-Host "------------------------------------------------"
         }
-
-        # 通过 Key 来绝对定位，防止顺序乱掉
-        $hashM = ($hashes | Where-Object { $_.Key -eq "M" }).Hash
-        $hashZ = ($hashes | Where-Object { $_.Key -eq "Z" }).Hash
-
-        Write-Host "S0${seasonChoice}E$relEp (Abs: $absEp):" -ForegroundColor Yellow
-        Write-Host "  M-File: $($fM.Name)"
-        Write-Host "  Z-File: $($fZ.Name)"
-        Write-Host "  $hashMethod-M : $hashM"
-        Write-Host "  $hashMethod-Z : $hashZ"
-
-        if ($hashM -eq "HASH_FAILED" -or $hashZ -eq "HASH_FAILED") {
-            Write-Host "  Result: [ HASH FAILED ]" -ForegroundColor Magenta
-        } elseif ($hashM -eq $hashZ) {
-            Write-Host "  Result: [ MATCH ]" -ForegroundColor Green
-        } else {
-            Write-Host "  Result: [ CONFLICT / MISMATCH ]" -ForegroundColor Red
-        }
-        Write-Host "------------------------------------------------"
     }
-}
+} # End Measure-Command for total time
 
 # 7. Final Summary
 Write-Host "================ Summary ================" -ForegroundColor Cyan
-Write-Host "  Compared : $count"
-Write-Host "  Skipped  : $skipped"
+Write-Host "  Compared : $($script:count)"
+Write-Host "  Skipped  : $($script:skipped)"
 Write-Host "  Algorithm: $hashMethod"
+# 输出总耗时，带 hh:mm:ss 格式便于查看长耗时算法
+Write-Host "  TotalTime: $($totalTime.TotalSeconds.ToString('F2')) s ($($totalTime.ToString('hh\:mm\:ss')))"
 Write-Host "=========================================" -ForegroundColor Cyan
