@@ -147,7 +147,7 @@ $totalTime = Measure-Command {
                                 }
                                 $out = Get-Content -Path $tmpFile -Raw
 
-                                if ($method -eq "CRC" -and $out -match "CRC32.*([0-9A-Fa-f]{8})\s*$") {
+                                if ($method -eq "CRC" -and $out -match "CRC32\s+for\s+data:\s+([0-9A-Fa-f]{8})") {
                                     $result = $matches[1].ToUpper()
                                 } elseif ($method -eq "XXH128" -and $out -match "\\?([0-9A-Fa-f]{32})\s") {
                                     $result = $matches[1].ToUpper()
