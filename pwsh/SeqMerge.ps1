@@ -1,0 +1,1 @@
+mkdir Combined; $i = 1; Get-ChildItem -Directory -Filter "<相同前缀>*" | Sort-Object { [int]($_.Name -replace '\D', '') } | Get-ChildItem -File | ForEach-Object { Copy-Item $_.FullName -Destination "Combined\$($i)$($_.Extension)"; $i++ }
