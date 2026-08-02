@@ -1,5 +1,5 @@
 # ============================================================
-# scoop-ghproxy.ps1 — Scoop GitHub 加速管理脚本
+# scoop-proxy.ps1 — Scoop GitHub 加速管理脚本
 #
 # 功能:
 #   1. 自定义加速链接: gh-proxy.com / ghfast.top / 自定义
@@ -8,25 +8,37 @@
 #   4. 恢复 bucket 原始 GitHub 地址
 #
 # 用法:
-#   交互模式:             .\scoop-ghproxy.ps1
-#   非交互:               .\scoop-ghproxy.ps1 -Proxy ghfast.top -Action enable-both
-#   仅查看状态:           .\scoop-ghproxy.ps1 -Status
-#   恢复下载链接 patch:   .\scoop-ghproxy.ps1 -Action restore-download
-#   恢复 bucket 原始地址: .\scoop-ghproxy.ps1 -Action restore-bucket
+#   交互模式(推荐):      irm https://raw.githubusercontent.com/Dr1mH4X/Scripts/refs/heads/main/pwsh/scoop-proxy.ps1 | iex
+#   或本地运行:          .\scoop-proxy.ps1
+#   非交互:              .\scoop-proxy.ps1 -Proxy ghfast.top -Action enable-both
+#   仅查看状态:          .\scoop-proxy.ps1 -Status
+#   恢复下载链接 patch:  .\scoop-proxy.ps1 -Action restore-download
+#   恢复 bucket 原始地址: .\scoop-proxy.ps1 -Action restore-bucket
 #
 # 注意:
 #   - 找不到 Scoop 时可用 -ScoopDir 指定根目录
 #   - scoop update 自更新会覆盖 download.ps1 导致 patch 失效, 重跑本脚本即可
 # ============================================================
 
-param(
-    [string]$Proxy,
-    [ValidateSet('enable-bucket', 'enable-download', 'enable-both', 'switch-proxy', 'restore-download', 'restore-bucket')]
-    [string]$Action,
-    [switch]$Status,
-    [string]$ScoopDir,
-    [switch]$SkipConfig
-)
+# 手动解析参数 (兼容 irm | iex 运行方式, iex 不支持 param 块)
+$Proxy = $null
+$Action = $null
+$Status = $false
+$ScoopDir = $null
+$SkipConfig = $false
+
+for ($i = 0; $i -lt $args.Count; $i++) {
+    switch ($args[$i]) {
+        '-Proxy'      { $Proxy = $args[++$i] }
+        '-Action'     { $Action = $args[++$i] }
+        '-ScoopDir'   { $ScoopDir = $args[++$i] }
+        '-Status'     { $Status = $true }
+        '-SkipConfig' { $SkipConfig = $true }
+        default {
+            Write-Host "WARN: 未知参数: $($args[$i])" -ForegroundColor Yellow
+        }
+    }
+}
 
 $KnownProxies = @('gh-proxy.com', 'ghfast.top')
 $patchMarker = '# === SCOOP-GITHUB-PROXY-PATCHED ==='
@@ -154,6 +166,14 @@ function Enable-BucketProxy {
 # 启用 - 替换下载链接 (patch download.ps1)
 # ============================================================
 
+function Ensure-AutoStash {
+    $autostash = ((scoop config autostash_on_conflict 2>$null | Out-String).Trim())
+    if ($autostash -notmatch '^(?i)true$') {
+        scoop config autostash_on_conflict true | Out-Null
+        Write-Host 'OK: 已启用 autostash_on_conflict (scoop update 不再因 patch 中止)' -ForegroundColor Green
+    }
+}
+
 function Enable-DownloadProxy {
     param([string]$ScoopRoot, [string]$Proxy)
     $downloadPs1 = Get-DownloadPs1 $ScoopRoot
@@ -166,6 +186,7 @@ function Enable-DownloadProxy {
         if (-not $SkipConfig) {
             scoop config GITHUB_PROXY "https://$Proxy" | Out-Null
             Write-Host "OK: download.ps1 已 patch, 仅更新 GITHUB_PROXY = https://$Proxy (无需重新注入)" -ForegroundColor Green
+            Ensure-AutoStash
         } else {
             Write-Host 'INFO: download.ps1 已 patch, 跳过配置更新 (SkipConfig)'
         }
@@ -179,6 +200,7 @@ function Enable-DownloadProxy {
     if (-not $SkipConfig) {
         scoop config GITHUB_PROXY "https://$Proxy" | Out-Null
         Write-Host "OK: scoop config GITHUB_PROXY = https://$Proxy"
+        Ensure-AutoStash
     }
 
     $content = Get-Content $downloadPs1 -Raw -Encoding UTF8
@@ -366,11 +388,7 @@ function Show-Status {
 
 function Update-ScoopAndReEnable {
     param([string]$ScoopRoot)
-    $autostash = ((scoop config autostash_on_conflict 2>$null | Out-String).Trim())
-    if ($autostash -notmatch '^(?i)true$') {
-        scoop config autostash_on_conflict true | Out-Null
-        Write-Host 'OK: 已启用 autostash_on_conflict (scoop update 不再因 patch 中止)' -ForegroundColor Green
-    }
+    Ensure-AutoStash
     Write-Host '--- 更新 Scoop 核心 ---'
     scoop update scoop 2>&1
     Write-Host ''
