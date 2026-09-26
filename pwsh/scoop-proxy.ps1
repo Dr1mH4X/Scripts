@@ -1,28 +1,28 @@
 # ============================================================
-# scoop-proxy.ps1 — Scoop GitHub 加速管理脚本
+# scoop-proxy.ps1 — Scoop GitHub proxy manager
 #
-# 功能:
-# 1. 自定义加速链接: gh-proxy.com / ghfast.top / 自定义
-# 2. 选择替换范围: 仅 bucket / 仅下载链接 / 两者都替换
-# 3. 恢复 download.ps1 原始备份
-# 4. 恢复 bucket 原始 GitHub 地址
-# 5. 支持命令行更新: -Update (配合 -Proxy 可指定新代理)
+# Features:
+# 1. Custom proxy URL: gh-proxy.com / ghfast.top / custom
+# 2. Choose scope: bucket only / download links only / both
+# 3. Restore download.ps1 from original backup
+# 4. Restore bucket original GitHub URLs
+# 5. Command-line update: -Update (with -Proxy to specify new proxy)
 #
-# 用法:
-# 交互模式(推荐): irm https://raw.githubusercontent.com/... | iex
-# 或本地运行: .\scoop-proxy.ps1
+# Usage:
+# Interactive (recommended): irm https://raw.githubusercontent.com/... | iex
+# Or run locally: .\scoop-proxy.ps1
 #
-# 非交互:
-# 启用加速: .\scoop-proxy.ps1 -Proxy ghfast.top -Action enable-both
-# 仅查看状态: .\scoop-proxy.ps1 -Status
-# 更新并加速: .\scoop-proxy.ps1 -Update
+# Non-interactive:
+# Enable proxy: .\scoop-proxy.ps1 -Proxy ghfast.top -Action enable-both
+# Status only:  .\scoop-proxy.ps1 -Status
+# Update + enable: .\scoop-proxy.ps1 -Update
 #
-# 注意:
-# - 找不到 Scoop 时可用 -ScoopDir 指定根目录
-# - scoop update 自更新会覆盖 download.ps1 导致 patch 失效, 重跑本脚本即可
+# Notes:
+# - If Scoop is not found, use -ScoopDir to specify the root directory
+# - scoop update will overwrite download.ps1 and break the patch; rerun this script
 # ============================================================
 
-# 手动解析参数 (兼容 irm | iex 运行方式, iex 不支持 param 块)
+# Manual argument parsing (compatible with irm | iex, iex does not support param block)
 $Proxy = $null
 $Action = $null
 $Status = $false
@@ -53,7 +53,7 @@ for ($i = 0; $i -lt $args.Count; $i++)
         { $Update = $true
         }
         default
-        { Write-Host "WARN: 未知参数: $($args[$i])" -ForegroundColor Yellow
+        { Write-Host "WARN: Unknown argument: $($args[$i])" -ForegroundColor Yellow
         }
     }
 }
@@ -62,7 +62,7 @@ $KnownProxies = @('gh-proxy.com', 'ghfast.top')
 $patchMarker = '# === SCOOP-GITHUB-PROXY-PATCHED ==='
 
 # ============================================================
-# 工具函数
+# Utility functions
 # ============================================================
 
 function Find-ScoopDir
@@ -129,6 +129,19 @@ function Normalize-Proxy
     return ($Value.Trim().TrimStart('http://').TrimStart('https://').TrimEnd('/'))
 }
 
+function Send-Notification
+{
+    param([string]$Text)
+    try
+    {
+        Import-Module BurntToast -ErrorAction Stop
+        New-BurntToastNotification -Text $Text
+    } catch
+    {
+        Write-Host 'INFO: BurntToast not available, skipping notification.'
+    }
+}
+
 function Get-BucketRemoteUrls
 {
     param([string]$ScoopDir)
@@ -151,7 +164,7 @@ function Get-BucketRemoteUrls
     return $map
 }
 
-# 裸 github 地址 -> 代理前缀地址 (非 github 地址返回 $null)
+# Bare github URL -> proxied URL (non-github returns $null)
 function Get-ProxiedUrl
 {
     param([string]$Url, [string]$Proxy)
@@ -167,7 +180,7 @@ function Get-ProxiedUrl
     return $null
 }
 
-# 代理前缀地址 -> 裸 github 地址 (非代理地址返回 $null)
+# Proxied URL -> bare github URL (non-proxied returns $null)
 function Get-BareUrl
 {
     param([string]$Url)
@@ -203,13 +216,13 @@ function Read-ProxyConfig
 }
 
 # ============================================================
-# 启用 - 替换 bucket 地址
+# Enable - replace bucket URLs
 # ============================================================
 
 function Enable-BucketProxy
 {
     param([string]$ScoopRoot, [string]$Proxy)
-    Write-Host "--- 替换 bucket (代理: https://$Proxy) ---"
+    Write-Host "--- Replacing buckets (proxy: https://$Proxy) ---"
     $map = Get-BucketRemoteUrls $ScoopRoot
     $changed = 0
     foreach ($name in ($map.Keys | Sort-Object))
@@ -222,25 +235,25 @@ function Enable-BucketProxy
             $changed++
         } elseif ($new -and $new -eq $map[$name])
         {
-            Write-Host " [--] $name 已是 $new"
+            Write-Host " [--] $name already set to $new"
         }
     }
     if ($changed -eq 0)
-    { Write-Host ' 没有需要替换的 GitHub bucket' -ForegroundColor Yellow
+    { Write-Host ' No GitHub buckets need replacement' -ForegroundColor Yellow
     }
 }
 
 # ============================================================
-# 启用 - 替换下载链接
+# Enable - replace download links
 # ============================================================
 
 function Ensure-AutoStash
 {
-    $autostash = ((scoop config autostash_on_conflict 2>$null | Out-String).Trim())
+    $autostash = ((scoop config autostash_on_conflict 2>$null 6>$null | Out-String).Trim())
     if ($autostash -notmatch '^(?i)true$')
     {
-        scoop config autostash_on_conflict true | Out-Null
-        Write-Host 'OK: 已启用 autostash_on_conflict (scoop update 不再因 patch 中止)' -ForegroundColor Green
+        scoop config autostash_on_conflict true 6>$null | Out-Null
+        Write-Host 'OK: autostash_on_conflict enabled (scoop update will no longer abort on patch)' -ForegroundColor Green
     }
 }
 
@@ -249,29 +262,29 @@ function Enable-DownloadProxy
     param([string]$ScoopRoot, [string]$Proxy)
     $downloadPs1 = Get-DownloadPs1 $ScoopRoot
     if (-not $downloadPs1)
-    { Write-Host 'ERROR: 找不到 download.ps1' -ForegroundColor Red; return
+    { Write-Host 'ERROR: download.ps1 not found' -ForegroundColor Red; return
     }
 
     if (Test-IsPatched $downloadPs1)
     {
         if (-not $SkipConfig)
         {
-            scoop config GITHUB_PROXY "https://$Proxy" | Out-Null
-            Write-Host "OK: download.ps1 已 patch, 仅更新 GITHUB_PROXY = https://$Proxy (无需重新注入)" -ForegroundColor Green
+            scoop config GITHUB_PROXY "https://$Proxy" 6>$null | Out-Null
+            Write-Host "OK: download.ps1 already patched, only updated GITHUB_PROXY = https://$Proxy (no re-injection needed)" -ForegroundColor Green
             Ensure-AutoStash
         } else
         {
-            Write-Host 'INFO: download.ps1 已 patch, 跳过配置更新'
+            Write-Host 'INFO: download.ps1 already patched, skipping config update'
         }
         return
     }
 
     $orig = Get-OrigPath $downloadPs1
     Copy-Item $downloadPs1 $orig -Force
-    Write-Host "OK: 已备份原始文件 -> download.ps1.sgp-orig"
+    Write-Host "OK: original file backed up -> download.ps1.sgp-orig"
     if (-not $SkipConfig)
     {
-        scoop config GITHUB_PROXY "https://$Proxy" | Out-Null
+        scoop config GITHUB_PROXY "https://$Proxy" 6>$null | Out-Null
         Write-Host "OK: scoop config GITHUB_PROXY = https://$Proxy"
         Ensure-AutoStash
     }
@@ -299,7 +312,7 @@ function Enable-DownloadProxy
     }
 
     if ($funcStart -lt 0 -or $funcEnd -lt 0)
-    { Write-Host 'ERROR: 无法定位 handle_special_urls 函数' -ForegroundColor Red; return
+    { Write-Host 'ERROR: could not locate handle_special_urls function' -ForegroundColor Red; return
     }
 
     $lastReturnLine = -1
@@ -310,7 +323,7 @@ function Enable-DownloadProxy
         }
     }
     if ($lastReturnLine -lt 0)
-    { Write-Host 'ERROR: 在 handle_special_urls 中未找到 return $url' -ForegroundColor Red; return
+    { Write-Host 'ERROR: could not find return $url in handle_special_urls' -ForegroundColor Red; return
     }
 
     $indent = ''
@@ -320,7 +333,7 @@ function Enable-DownloadProxy
 
     $injected = @'
 # === SCOOP-GITHUB-PROXY-PATCHED ===
-# 自动为 GitHub 下载 URL 拼接代理，可通过 scoop config GITHUB_PROXY 配置
+# Automatically prefixes GitHub download URLs with a proxy, configurable via scoop config GITHUB_PROXY
 $ghProxy = get_config GITHUB_PROXY
 if ( $ghProxy -and $url -match '^https?://(github\.com|raw\.githubusercontent\.com|api\.github\.com|objects-githubusercontent\.com|release-assets\.githubusercontent\.com|codeload\.github\.com|gist\.githubusercontent\.com)/' ) {
     $url = "$ghProxy/$url"
@@ -333,11 +346,11 @@ if ( $ghProxy -and $url -match '^https?://(github\.com|raw\.githubusercontent\.c
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($downloadPs1, $newContent, $utf8NoBom)
-    Write-Host "OK: download.ps1 已 patch (代理: https://$Proxy)" -ForegroundColor Green
+    Write-Host "OK: download.ps1 patched" -ForegroundColor Green
 }
 
 # ============================================================
-# 切换加速链接 (只更新配置与 bucket 前缀, 无需重新 patch)
+# Switch proxy (updates config + bucket prefix only, no re-patch)
 # ============================================================
 
 function Switch-Proxy
@@ -348,17 +361,17 @@ function Switch-Proxy
     {
         if (-not $SkipConfig)
         {
-            scoop config GITHUB_PROXY "https://$Proxy" | Out-Null
-            Write-Host "OK: GITHUB_PROXY 已更新为 https://$Proxy (download.ps1 无需重新 patch)" -ForegroundColor Green
+            scoop config GITHUB_PROXY "https://$Proxy" 6>$null | Out-Null
+            Write-Host "OK: GITHUB_PROXY updated to https://$Proxy (download.ps1 does not need re-patching)" -ForegroundColor Green
         }
     } else
-    { Write-Host 'INFO: download.ps1 未 patch, 跳过下载链接代理'
+    { Write-Host 'INFO: download.ps1 not patched, skipping download link proxy'
     }
     Enable-BucketProxy $ScoopRoot $Proxy
 }
 
 # ============================================================
-# 恢复 - 还原 download.ps1
+# Restore - revert download.ps1
 # ============================================================
 
 function Disable-DownloadProxy
@@ -367,7 +380,7 @@ function Disable-DownloadProxy
     $downloadPs1 = Get-DownloadPs1 $ScoopRoot
     if (-not $downloadPs1)
     { if (-not $Silent)
-        { Write-Host 'ERROR: 找不到 download.ps1' -ForegroundColor Red
+        { Write-Host 'ERROR: download.ps1 not found' -ForegroundColor Red
         }; return
     }
 
@@ -377,7 +390,7 @@ function Disable-DownloadProxy
         Copy-Item $orig $downloadPs1 -Force
         Remove-Item $orig
         if (-not $Silent)
-        { Write-Host 'OK: 已从备份 恢复原始 download.ps1' -ForegroundColor Green
+        { Write-Host 'OK: original download.ps1 restored from backup' -ForegroundColor Green
         }
     } elseif (Test-IsPatched $downloadPs1)
     {
@@ -387,12 +400,12 @@ function Disable-DownloadProxy
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText($downloadPs1, $newContent, $utf8NoBom)
         if (-not $Silent)
-        { Write-Host 'OK: 已移除 patch 代码 (无备份, 正则清理)' -ForegroundColor Green
+        { Write-Host 'OK: patch code removed (no backup, cleaned via regex)' -ForegroundColor Green
         }
     } else
     {
         if (-not $Silent)
-        { Write-Host 'INFO: download.ps1 未被 patch, 无需操作'
+        { Write-Host 'INFO: download.ps1 is not patched, nothing to do'
         }
         if ($SkipConfig)
         { return
@@ -401,19 +414,19 @@ function Disable-DownloadProxy
 
     if (-not $SkipConfig)
     {
-        scoop config rm GITHUB_PROXY 2>&1 | Out-Null
-        Write-Host 'OK: 已移除 GITHUB_PROXY 配置'
+        scoop config rm GITHUB_PROXY 2>&1 6>$null | Out-Null
+        Write-Host 'OK: GITHUB_PROXY config removed'
     }
 }
 
 # ============================================================
-# 恢复 - 移除 bucket 代理前缀
+# Restore - remove bucket proxy prefix
 # ============================================================
 
 function Disable-BucketProxy
 {
     param([string]$ScoopRoot)
-    Write-Host '--- 恢复 bucket 原始 GitHub 地址 ---'
+    Write-Host '--- Restoring bucket original GitHub URLs ---'
     $map = Get-BucketRemoteUrls $ScoopRoot
     $changed = 0
     foreach ($name in ($map.Keys | Sort-Object))
@@ -427,34 +440,34 @@ function Disable-BucketProxy
         }
     }
     if ($changed -eq 0)
-    { Write-Host ' 没有带代理前缀的 bucket' -ForegroundColor Yellow
+    { Write-Host ' No buckets with proxy prefix' -ForegroundColor Yellow
     }
 }
 
 # ============================================================
-# 状态
+# Status
 # ============================================================
 
 function Show-Status
 {
     param([string]$ScoopRoot)
     Write-Host ''
-    Write-Host '=== Scoop GitHub 加速状态 ===' -ForegroundColor Cyan
-    Write-Host "Scoop 路径: $ScoopRoot"
+    Write-Host '=== Scoop GitHub proxy status ===' -ForegroundColor Cyan
+    Write-Host "Scoop path: $ScoopRoot"
     $downloadPs1 = Get-DownloadPs1 $ScoopRoot
     $patched = $downloadPs1 -and (Test-IsPatched $downloadPs1)
     $hasBackup = $downloadPs1 -and (Test-Path (Get-OrigPath $downloadPs1))
     Write-Host -NoNewline 'download.ps1: '
     if ($patched)
-    { Write-Host '已 Patch' -ForegroundColor Green
+    { Write-Host 'Patched' -ForegroundColor Green
     } else
-    { Write-Host '未 Patch' -ForegroundColor Yellow
+    { Write-Host 'Not patched' -ForegroundColor Yellow
     }
-    Write-Host -NoNewline '备份文件: '
+    Write-Host -NoNewline 'Backup file: '
     if ($hasBackup)
-    { Write-Host '有'
+    { Write-Host 'present'
     } else
-    { Write-Host '无' -ForegroundColor Yellow
+    { Write-Host 'absent' -ForegroundColor Yellow
     }
 
     $proxy = Read-ProxyConfig
@@ -462,7 +475,7 @@ function Show-Status
     if ($proxy)
     { Write-Host $proxy
     } else
-    { Write-Host '未设置' -ForegroundColor Yellow
+    { Write-Host 'not set' -ForegroundColor Yellow
     }
 
     $map = Get-BucketRemoteUrls $ScoopRoot
@@ -478,46 +491,46 @@ function Show-Status
         { $other += $name
         }
     }
-    Write-Host -NoNewline 'bucket 带代理: '
+    Write-Host -NoNewline 'buckets with proxy: '
     if ($proxied)
     { Write-Host ($proxied -join ', ')
     } else
-    { Write-Host '无' -ForegroundColor Yellow
+    { Write-Host 'none' -ForegroundColor Yellow
     }
-    Write-Host -NoNewline 'bucket 直连: '
+    Write-Host -NoNewline 'buckets direct: '
     if ($bare)
     { Write-Host ($bare -join ', ')
     } else
-    { Write-Host '无' -ForegroundColor Yellow
+    { Write-Host 'none' -ForegroundColor Yellow
     }
-    Write-Host -NoNewline 'bucket 其他源: '
+    Write-Host -NoNewline 'buckets other sources: '
     if ($other)
     { Write-Host ($other -join ', ')
     } else
-    { Write-Host '无'
+    { Write-Host 'none'
     }
     Write-Host ''
 }
 
 # ============================================================
-# 更新 Scoop 核心并重新启用加速
+# Update Scoop core and re-enable proxy
 # ============================================================
 
 function Update-ScoopAndReEnable
 {
     param([string]$ScoopRoot, [string]$Proxy)
     Ensure-AutoStash
-    Write-Host '--- 更新 Scoop 核心 ---'
+    Write-Host '--- Updating Scoop core ---'
     scoop update scoop 2>&1
     Write-Host ''
 
     if (-not $Proxy)
     {
-        Write-Host 'ERROR: 更新后未找到代理配置，请手动重新启用加速。' -ForegroundColor Red
+        Write-Host 'ERROR: No proxy config found after update, please re-enable the proxy manually.' -ForegroundColor Red
         return
     }
 
-    Write-Host "GITHUB_PROXY 使用 $Proxy, 重新启用..." -ForegroundColor Cyan
+    Write-Host "Using GITHUB_PROXY $Proxy, re-enabling..." -ForegroundColor Cyan
     Enable-DownloadProxy $ScoopRoot $Proxy
 
     Write-Host ''
@@ -525,22 +538,23 @@ function Update-ScoopAndReEnable
     if (Test-Path "$scoopCurrentDir\.git")
     {
         git -C $scoopCurrentDir stash clear 2>&1 | Out-Null
-        Write-Host 'OK: 已清理 autostash 残留' -ForegroundColor Green
+        Write-Host 'OK: autostash residue cleared' -ForegroundColor Green
     }
+    Send-Notification 'Scoop Update Complete.'
 }
 
 # ============================================================
-# 交互菜单
+# Interactive menu
 # ============================================================
 
 function Select-Proxy
 {
     Write-Host ''
-    Write-Host ' 选择加速链接:'
+    Write-Host ' Select proxy URL:'
     Write-Host ' 1. gh-proxy.com'
     Write-Host ' 2. ghfast.top'
-    Write-Host ' 3. 自定义 (输入域名, 不带 https://)'
-    $c = Read-Host ' 请输入 [1-3]'
+    Write-Host ' 3. Custom (enter domain, without https://)'
+    $c = Read-Host ' Enter [1-3]'
     switch ($c)
     {
         '1'
@@ -550,12 +564,12 @@ function Select-Proxy
         { return 'ghfast.top'
         }
         '3'
-        { $u = Read-Host ' 代理域名 (如 my-proxy.example.com)'; if ($u)
+        { $u = Read-Host ' Proxy domain (e.g. my-proxy.example.com)'; if ($u)
             { return (Normalize-Proxy $u)
-            }; Write-Host ' 无效输入' -ForegroundColor Red; return $null
+            }; Write-Host ' Invalid input' -ForegroundColor Red; return $null
         }
         default
-        { Write-Host " 无效输入: $c" -ForegroundColor Red; return $null
+        { Write-Host " Invalid input: $c" -ForegroundColor Red; return $null
         }
     }
 }
@@ -567,38 +581,38 @@ function Show-Menu
     while ($true)
     {
         Write-Host '========================================' -ForegroundColor Cyan
-        Write-Host ' Scoop GitHub 加速管理' -ForegroundColor Cyan
+        Write-Host ' Scoop GitHub Proxy Manager' -ForegroundColor Cyan
         Write-Host '========================================' -ForegroundColor Cyan
-        Write-Host ' 1. 启用加速 - 替换 bucket (git remote 加代理前缀)'
-        Write-Host ' 2. 启用加速 - 替换下载链接 (patch download.ps1)'
-        Write-Host ' 3. 启用加速 - 两者都替换'
-        Write-Host ' 4. 恢复 - 还原 download.ps1 原始备份'
-        Write-Host ' 5. 恢复 - 移除 bucket 代理前缀'
-        Write-Host ' 6. 更新 Scoop 并重新启用加速'
-        Write-Host ' 0. 退出'
-        $choice = Read-Host ' 请输入 [0-6]'
+        Write-Host ' 1. Enable - replace buckets (add proxy prefix to git remote)'
+        Write-Host ' 2. Enable - replace download links (patch download.ps1)'
+        Write-Host ' 3. Enable - replace both'
+        Write-Host ' 4. Restore - revert download.ps1 from original backup'
+        Write-Host ' 5. Restore - remove bucket proxy prefix'
+        Write-Host ' 6. Update Scoop and re-enable proxy'
+        Write-Host ' 0. Exit'
+        $choice = Read-Host ' Enter [0-6]'
         switch ($choice)
         {
             '1'
             { $p = Select-Proxy; if ($p)
-                { Enable-BucketProxy $ScoopRoot $p
+                { Enable-BucketProxy $ScoopRoot $p; Send-Notification 'Scoop Proxy: bucket proxy enabled.'
                 }
             }
             '2'
             { $p = Select-Proxy; if ($p)
-                { Enable-DownloadProxy $ScoopRoot $p
+                { Enable-DownloadProxy $ScoopRoot $p; Send-Notification 'Scoop Proxy: download proxy enabled.'
                 }
             }
             '3'
             { $p = Select-Proxy; if ($p)
-                { Enable-DownloadProxy $ScoopRoot $p; Enable-BucketProxy $ScoopRoot $p
+                { Enable-DownloadProxy $ScoopRoot $p; Enable-BucketProxy $ScoopRoot $p; Send-Notification 'Scoop Proxy: proxy enabled (buckets + download).'
                 }
             }
             '4'
-            { Disable-DownloadProxy $ScoopRoot
+            { Disable-DownloadProxy $ScoopRoot; Send-Notification 'Scoop Proxy: download proxy restored.'
             }
             '5'
-            { Disable-BucketProxy $ScoopRoot
+            { Disable-BucketProxy $ScoopRoot; Send-Notification 'Scoop Proxy: bucket proxy restored.'
             }
             '6'
             { $p = Read-ProxyConfig; if (-not $p)
@@ -611,7 +625,7 @@ function Show-Menu
             { return
             }
             default
-            { Write-Host " 无效输入: $choice" -ForegroundColor Red
+            { Write-Host " Invalid input: $choice" -ForegroundColor Red
             }
         }
     }
@@ -630,7 +644,7 @@ function Main
     }
     if (-not $script:ScoopDir -or -not (Test-Path $script:ScoopDir))
     {
-        Write-Host 'ERROR: 找不到 Scoop 安装目录 (可设置 SCOOP 环境变量或用 -ScoopDir 指定)' -ForegroundColor Red
+        Write-Host 'ERROR: Scoop installation directory not found (set SCOOP env var or use -ScoopDir)' -ForegroundColor Red
         exit 1
     }
 
@@ -638,17 +652,17 @@ function Main
     { Show-Status $script:ScoopDir; return
     }
 
-    # 处理 -Update 参数
+    # Handle -Update argument
     if ($Update)
     {
-        # 如果命令行没带 -Proxy，尝试读取配置
+        # If no -Proxy on command line, try to read from config
         if (-not $Proxy)
         { $Proxy = Read-ProxyConfig
         }
         if (-not $Proxy)
         {
-            Write-Host "ERROR: 未指定代理且配置中未找到 GITHUB_PROXY。" -ForegroundColor Red
-            Write-Host "用法: .\scoop-proxy.ps1 -Update -Proxy ghfast.top" -ForegroundColor Yellow
+            Write-Host "ERROR: No proxy specified and GITHUB_PROXY not found in config." -ForegroundColor Red
+            Write-Host "Usage: .\scoop-proxy.ps1 -Update -Proxy ghfast.top" -ForegroundColor Yellow
             return
         }
         $Proxy = Normalize-Proxy $Proxy
@@ -665,22 +679,22 @@ function Main
         {
             'enable-bucket'
             { if (-not $Proxy)
-                { Write-Host 'ERROR: 需要 -Proxy 参数' -ForegroundColor Red; return
+                { Write-Host 'ERROR: -Proxy argument required' -ForegroundColor Red; return
                 }; Enable-BucketProxy $script:ScoopDir $Proxy
             }
             'enable-download'
             { if (-not $Proxy)
-                { Write-Host 'ERROR: 需要 -Proxy 参数' -ForegroundColor Red; return
+                { Write-Host 'ERROR: -Proxy argument required' -ForegroundColor Red; return
                 }; Enable-DownloadProxy $script:ScoopDir $Proxy
             }
             'enable-both'
             { if (-not $Proxy)
-                { Write-Host 'ERROR: 需要 -Proxy 参数' -ForegroundColor Red; return
+                { Write-Host 'ERROR: -Proxy argument required' -ForegroundColor Red; return
                 }; Enable-DownloadProxy $script:ScoopDir $Proxy; Enable-BucketProxy $script:ScoopDir $Proxy
             }
             'switch-proxy'
             { if (-not $Proxy)
-                { Write-Host 'ERROR: 需要 -Proxy 参数' -ForegroundColor Red; return
+                { Write-Host 'ERROR: -Proxy argument required' -ForegroundColor Red; return
                 }; Switch-Proxy $script:ScoopDir $Proxy
             }
             'restore-download'
@@ -689,6 +703,10 @@ function Main
             'restore-bucket'
             { Disable-BucketProxy $script:ScoopDir
             }
+        }
+        $knownActions = @('enable-bucket', 'enable-download', 'enable-both', 'switch-proxy', 'restore-download', 'restore-bucket')
+        if ($knownActions -contains $Action)
+        { Send-Notification "Scoop Proxy: $Action completed."
         }
         return
     }
